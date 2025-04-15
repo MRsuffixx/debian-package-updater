@@ -39,13 +39,13 @@ Bu script, Debian 11 ve Debian 12 sistemleri için `sources.list` dosyasını g�
 #### Option 1: One-line execution (Recommended)
 Run the script directly with a single command:
 ```bash
-curl -s https://raw.githubusercontent.com/yourusername/yourrepository/main/nacss-debian-11-12-updater.sh | sudo bash
+curl -s https://raw.githubusercontent.com/MRsuffixx/nacss-debian-updater/main/nacss-debian-11-12-updater.sh | sudo bash
 ```
 
 #### Option 2: Download and execute
 1. Download the script:
    ```bash
-   wget -O nacss-debian-11-12-updater.sh https://raw.githubusercontent.com/yourusername/yourrepository/main/nacss-debian-11-12-updater.sh
+   wget -O nacss-debian-11-12-updater.sh https://raw.githubusercontent.com/MRsuffixx/nacss-debian-updater/main/nacss-debian-11-12-updater.sh
    ```
 
 2. Make the script executable:
@@ -63,13 +63,13 @@ curl -s https://raw.githubusercontent.com/yourusername/yourrepository/main/nacss
 #### Seçenek 1: Tek komutla çalıştırma (Önerilen)
 Script'i doğrudan tek bir komutla çalıştırın:
 ```bash
-curl -s https://raw.githubusercontent.com/yourusername/yourrepository/main/nacss-debian-11-12-updater.sh | sudo bash
+curl -s https://raw.githubusercontent.com/MRsuffixx/nacss-debian-updater/main/nacss-debian-11-12-updater.sh | sudo bash
 ```
 
 #### Seçenek 2: İndirip çalıştırma
 1. Script'i indirin:
    ```bash
-   wget -O nacss-debian-11-12-updater.sh https://raw.githubusercontent.com/yourusername/yourrepository/main/nacss-debian-11-12-updater.sh
+   wget -O nacss-debian-11-12-updater.sh https://raw.githubusercontent.com/MRsuffixx/nacss-debian-updater/main/nacss-debian-11-12-updater.sh
    ```
 
 2. Script'i çalıştırılabilir yapın:
