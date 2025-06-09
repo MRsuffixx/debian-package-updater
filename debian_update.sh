@@ -1,13 +1,14 @@
 #!/bin/bash
 
-#==============================================================================
-# Linux Saat Dilimi Ayarlama Scripti
-# Versiyon: 1.0
-# Açıklama: Sunucu saat dilimini güvenli ve etkileşimli şekilde ayarlar
-# Gereksinimler: Root yetkisi, systemd tabanlı sistem
-#==============================================================================
+#############################################################################
+# Debian 10/11/12 Sunucu Güncelleme Scripti
+# Bu script Debian sunucularını güvenli bir şekilde güncelleştirir
+# Yazar: Sistem Yöneticisi
+# Sürüm: 1.0
+# Tarih: $(date +%Y-%m-%d)
+#############################################################################
 
-# Renk kodları ve formatlar
+# Renk kodları
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -16,537 +17,599 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 NC='\033[0m' # No Color
-BOLD='\033[1m'
 
 # Global değişkenler
-SCRIPT_NAME="$(basename "$0")"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="/var/log/timezone-setup"
-LOG_FILE="${LOG_DIR}/timezone-setup.log"
-BACKUP_DIR="/var/backups/timezone-setup"
-TEMP_DIR="/tmp/timezone-setup-$$"
-CURRENT_DATE=$(date '+%Y-%m-%d %H:%M:%S')
-ORIGINAL_TZ=""
-NEW_TZ=""
-CLEANUP_REQUIRED=0
+SCRIPT_NAME="Debian Güncelleme Scripti"
+LOG_DIR="/var/log/debian-update"
+LOG_FILE="$LOG_DIR/update-$(date +%Y%m%d-%H%M%S).log"
+BACKUP_DIR="/tmp/debian-update-backup"
+SOURCES_LIST="/etc/apt/sources.list"
+SOURCES_BACKUP="$BACKUP_DIR/sources.list.backup"
+RESOLV_BACKUP="$BACKUP_DIR/resolv.conf.backup"
+ORIGINAL_DNS=""
+DEBIAN_VERSION=""
+START_TIME=$(date +%s)
 
-#==============================================================================
-# Yardımcı Fonksiyonlar
-#==============================================================================
+#############################################################################
+# Fonksiyonlar
+#############################################################################
 
 # Log fonksiyonu
 log_message() {
-    local level="$1"
-    local message="$2"
+    local level=$1
+    local message=$2
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
-    # Konsola yazma
-    case "$level" in
-        "INFO")
-            echo -e "${GREEN}[INFO]${NC} $message"
-            ;;
-        "WARN")
-            echo -e "${YELLOW}[UYARI]${NC} $message"
-            ;;
+    echo "[$timestamp] [$level] $message" | tee -a "$LOG_FILE"
+    
+    case $level in
         "ERROR")
-            echo -e "${RED}[HATA]${NC} $message"
+            echo -e "${RED}[HATA]${NC} $message" >&2
+            ;;
+        "WARNING")
+            echo -e "${YELLOW}[UYARI]${NC} $message"
             ;;
         "SUCCESS")
             echo -e "${GREEN}[BAŞARILI]${NC} $message"
             ;;
-        "DEBUG")
-            echo -e "${CYAN}[DEBUG]${NC} $message"
+        "INFO")
+            echo -e "${BLUE}[BİLGİ]${NC} $message"
             ;;
-        *)
-            echo -e "${WHITE}[LOG]${NC} $message"
+        "PROGRESS")
+            echo -e "${CYAN}[İLERLEME]${NC} $message"
             ;;
     esac
-    
-    # Log dosyasına yazma
-    if [[ -w "$LOG_DIR" ]]; then
-        echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
-    fi
 }
 
 # İlerleme çubuğu
 show_progress() {
     local current=$1
     local total=$2
-    local message=$3
+    local description=$3
     local percent=$((current * 100 / total))
-    local bar_length=50
-    local filled_length=$((percent * bar_length / 100))
+    local filled=$((percent / 2))
+    local empty=$((50 - filled))
     
-    printf "\r${BLUE}[%s] %3d%% ${CYAN}%s${NC}" \
-        "$(printf "%*s" $filled_length | tr ' ' '█')$(printf "%*s" $((bar_length - filled_length)))" \
-        $percent "$message"
+    printf "\r${CYAN}[İLERLEME]${NC} $description: ["
+    printf "%*s" $filled | tr ' ' '='
+    printf "%*s" $empty | tr ' ' '-'
+    printf "] %d%%" $percent
     
-    if [[ $current -eq $total ]]; then
+    if [ $current -eq $total ]; then
         echo ""
     fi
 }
 
-# Hata yakalama ve temizlik
-error_exit() {
-    local error_message="$1"
-    local exit_code="${2:-1}"
-    
-    log_message "ERROR" "$error_message"
-    cleanup
-    exit $exit_code
+# Banner gösterimi
+show_banner() {
+    clear
+    echo -e "${PURPLE}"
+    echo "############################################################################"
+    echo "#                                                                          #"
+    echo "#                    DEBIAN SUNUCU GÜNCELLEME SCRİPTİ                     #"
+    echo "#                                                                          #"
+    echo "#              Debian 10 (Buster) / 11 (Bullseye) / 12 (Bookworm)       #"
+    echo "#                            Güvenli Güncelleme                           #"
+    echo "#                                                                          #"
+    echo "############################################################################"
+    echo -e "${NC}"
+    echo
 }
 
-# Temizlik fonksiyonu
-cleanup() {
-    if [[ $CLEANUP_REQUIRED -eq 1 ]]; then
-        log_message "INFO" "Temizlik işlemi başlatılıyor..."
-        
-        # Geçici dizin temizliği
-        if [[ -d "$TEMP_DIR" ]]; then
-            rm -rf "$TEMP_DIR" 2>/dev/null
-            log_message "DEBUG" "Geçici dizin temizlendi: $TEMP_DIR"
-        fi
-        
-        # Geçici dosyalar temizliği
-        find /tmp -name "timezone-setup-*" -type f -mmin +60 -delete 2>/dev/null
-        
-        log_message "INFO" "Temizlik işlemi tamamlandı"
-    fi
-}
-
-# Sinyal yakalama
-trap 'error_exit "Script kesintiye uğradı" 130' INT TERM
-
-#==============================================================================
-# Sistem Kontrol Fonksiyonları
-#==============================================================================
-
-# Root yetki kontrolü
-check_root_privileges() {
+# Root kontrol fonksiyonu
+check_root() {
     log_message "INFO" "Root yetki kontrolü yapılıyor..."
     
     if [[ $EUID -ne 0 ]]; then
-        log_message "ERROR" "Bu script root yetkisi ile çalıştırılmalıdır!"
-        echo -e "${RED}Kullanım:${NC} sudo $0"
+        log_message "ERROR" "Bu script root yetkileri ile çalıştırılmalıdır!"
+        echo -e "${RED}Lütfen scripti 'sudo $0' komutu ile çalıştırın.${NC}"
         exit 1
     fi
     
     log_message "SUCCESS" "Root yetki kontrolü başarılı"
 }
 
-# Sistem uyumluluğu kontrolü
-check_system_compatibility() {
-    log_message "INFO" "Sistem uyumluluğu kontrol ediliyor..."
+# Sistem bilgilerini al
+get_system_info() {
+    log_message "INFO" "Sistem bilgileri toplanıyor..."
     
-    # Systemd varlığı kontrolü
-    if ! command -v timedatectl >/dev/null 2>&1; then
-        error_exit "Bu sistem systemd tabanlı değil. timedatectl komutu bulunamadı."
-    fi
-    
-    # Temel komutlar kontrolü
-    local required_commands=("date" "ln" "cp" "mv" "mkdir" "rm" "find")
-    for cmd in "${required_commands[@]}"; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            error_exit "Gerekli komut bulunamadı: $cmd"
+    # Debian sürümünü tespit et
+    if [ -f /etc/debian_version ]; then
+        local version_info=$(cat /etc/debian_version)
+        if grep -q "10\." /etc/debian_version || grep -qi "buster" /etc/os-release; then
+            DEBIAN_VERSION="10"
+        elif grep -q "11\." /etc/debian_version || grep -qi "bullseye" /etc/os-release; then
+            DEBIAN_VERSION="11"
+        elif grep -q "12\." /etc/debian_version || grep -qi "bookworm" /etc/os-release; then
+            DEBIAN_VERSION="12"
+        else
+            log_message "ERROR" "Desteklenmeyen Debian sürümü: $version_info"
+            exit 1
         fi
-    done
-    
-    log_message "SUCCESS" "Sistem uyumluluğu kontrolü başarılı"
+        
+        log_message "SUCCESS" "Debian $DEBIAN_VERSION tespit edildi"
+        log_message "INFO" "Sistem: $(uname -a)"
+        log_message "INFO" "Uptime: $(uptime)"
+        log_message "INFO" "Disk kullanımı: $(df -h / | tail -1)"
+        log_message "INFO" "Bellek kullanımı: $(free -h | grep ^Mem)"
+    else
+        log_message "ERROR" "Bu sistem Debian değil!"
+        exit 1
+    fi
 }
 
-# Dizin yapısı kontrolü ve oluşturma
-setup_directories() {
-    log_message "INFO" "Dizin yapısı kontrol ediliyor ve oluşturuluyor..."
+# Backup dizinini oluştur
+create_backup_dir() {
+    log_message "INFO" "Backup dizini oluşturuluyor..."
     
-    # Log dizini
-    if [[ ! -d "$LOG_DIR" ]]; then
-        mkdir -p "$LOG_DIR" || error_exit "Log dizini oluşturulamadı: $LOG_DIR"
+    if [ ! -d "$BACKUP_DIR" ]; then
+        mkdir -p "$BACKUP_DIR"
+        if [ $? -eq 0 ]; then
+            log_message "SUCCESS" "Backup dizini oluşturuldu: $BACKUP_DIR"
+        else
+            log_message "ERROR" "Backup dizini oluşturulamadı!"
+            exit 1
+        fi
+    else
+        log_message "INFO" "Backup dizini zaten mevcut"
+    fi
+}
+
+# Log dizinini oluştur
+create_log_dir() {
+    if [ ! -d "$LOG_DIR" ]; then
+        mkdir -p "$LOG_DIR"
         chmod 755 "$LOG_DIR"
-        log_message "DEBUG" "Log dizini oluşturuldu: $LOG_DIR"
+        log_message "SUCCESS" "Log dizini oluşturuldu: $LOG_DIR"
     fi
-    
-    # Backup dizini
-    if [[ ! -d "$BACKUP_DIR" ]]; then
-        mkdir -p "$BACKUP_DIR" || error_exit "Backup dizini oluşturulamadı: $BACKUP_DIR"
-        chmod 755 "$BACKUP_DIR"
-        log_message "DEBUG" "Backup dizini oluşturuldu: $BACKUP_DIR"
-    fi
-    
-    # Geçici dizin
-    mkdir -p "$TEMP_DIR" || error_exit "Geçici dizin oluşturulamadı: $TEMP_DIR"
-    chmod 700 "$TEMP_DIR"
-    CLEANUP_REQUIRED=1
-    
-    log_message "SUCCESS" "Dizin yapısı hazırlandı"
 }
 
-#==============================================================================
-# Saat Dilimi Fonksiyonları
-#==============================================================================
-
-# Mevcut saat dilimi bilgisini al
-get_current_timezone() {
-    log_message "INFO" "Mevcut saat dilimi bilgisi alınıyor..."
+# Mevcut sources.list'i yedekle
+backup_sources_list() {
+    log_message "INFO" "Mevcut sources.list yedekleniyor..."
     
-    ORIGINAL_TZ=$(timedatectl show --property=Timezone --value)
-    if [[ -z "$ORIGINAL_TZ" ]]; then
-        error_exit "Mevcut saat dilimi bilgisi alınamadı"
-    fi
-    
-    log_message "DEBUG" "Mevcut saat dilimi: $ORIGINAL_TZ"
-}
-
-# Yedek alma
-create_backup() {
-    log_message "INFO" "Sistem ayarlarının yedeği alınıyor..."
-    
-    local backup_timestamp=$(date '+%Y%m%d_%H%M%S')
-    local backup_file="${BACKUP_DIR}/timezone_backup_${backup_timestamp}.tar.gz"
-    
-    # Yedeklenecek dosyalar ve dizinler
-    local backup_items=(
-        "/etc/localtime"
-        "/etc/timezone"
-        "/usr/share/zoneinfo"
-    )
-    
-    # Var olan dosyaları yedekle
-    local existing_items=()
-    for item in "${backup_items[@]}"; do
-        if [[ -e "$item" ]]; then
-            existing_items+=("$item")
-        fi
-    done
-    
-    if [[ ${#existing_items[@]} -gt 0 ]]; then
-        tar -czf "$backup_file" "${existing_items[@]}" 2>/dev/null || \
-            log_message "WARN" "Yedek alma işleminde bazı sorunlar oluştu"
-        
-        if [[ -f "$backup_file" ]]; then
-            log_message "SUCCESS" "Yedek dosyası oluşturuldu: $backup_file"
+    if [ -f "$SOURCES_LIST" ]; then
+        cp "$SOURCES_LIST" "$SOURCES_BACKUP"
+        if [ $? -eq 0 ]; then
+            log_message "SUCCESS" "sources.list yedeklendi"
+            log_message "INFO" "Yedek konumu: $SOURCES_BACKUP"
         else
-            log_message "WARN" "Yedek dosyası oluşturulamadı"
+            log_message "ERROR" "sources.list yedeklenemedi!"
+            exit 1
         fi
     else
-        log_message "WARN" "Yedeklenecek dosya bulunamadı"
+        log_message "WARNING" "sources.list dosyası bulunamadı!"
     fi
 }
 
-# Kullanılabilir saat dilimlerini listele
-list_available_timezones() {
-    log_message "INFO" "Kullanılabilir saat dilimleri listeleniyor..."
+# DNS ayarlarını yedekle ve Cloudflare DNS'e geç
+setup_dns() {
+    log_message "INFO" "DNS ayarları yapılandırılıyor..."
     
-    echo -e "\n${BOLD}${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${BLUE}║                    SAAT DİLİMLERİ LİSTESİ                    ║${NC}"
-    echo -e "${BOLD}${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}\n"
+    # Mevcut DNS ayarlarını yedekle
+    if [ -f /etc/resolv.conf ]; then
+        cp /etc/resolv.conf "$RESOLV_BACKUP"
+        ORIGINAL_DNS=$(grep "nameserver" /etc/resolv.conf | head -1 | awk '{print $2}')
+        log_message "INFO" "Mevcut DNS yedeklendi. Orijinal DNS: $ORIGINAL_DNS"
+    fi
     
-    # Popüler saat dilimleri
-    echo -e "${BOLD}${GREEN}Popüler Saat Dilimleri:${NC}"
-    echo -e "${CYAN}1.${NC}  Europe/Istanbul     (Türkiye - GMT+3)"
-    echo -e "${CYAN}2.${NC}  UTC                 (Koordineli Evrensel Zaman)"
-    echo -e "${CYAN}3.${NC}  Europe/London       (İngiltere - GMT+0/+1)"
-    echo -e "${CYAN}4.${NC}  Europe/Berlin       (Almanya - GMT+1/+2)"
-    echo -e "${CYAN}5.${NC}  America/New_York    (Doğu ABD - GMT-5/-4)"
-    echo -e "${CYAN}6.${NC}  America/Los_Angeles (Batı ABD - GMT-8/-7)"
-    echo -e "${CYAN}7.${NC}  Asia/Tokyo          (Japonya - GMT+9)"
-    echo -e "${CYAN}8.${NC}  Australia/Sydney    (Avustralya - GMT+10/+11)"
-    echo -e "${CYAN}9.${NC}  Europe/Moscow       (Rusya - GMT+3)"
-    echo -e "${CYAN}10.${NC} Asia/Dubai          (BAE - GMT+4)"
-    echo -e "${CYAN}11.${NC} Manual Entry        (Manuel giriş)"
-    echo -e "${CYAN}12.${NC} List All            (Tüm saat dilimlerini listele)"
+    # Cloudflare DNS'e geç
+    echo "# Geçici Cloudflare DNS ayarı" > /etc/resolv.conf
+    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+    echo "nameserver 1.0.0.1" >> /etc/resolv.conf
     
-    echo ""
-}
-
-# Tüm saat dilimlerini listele
-show_all_timezones() {
-    log_message "INFO" "Tüm saat dilimleri listeleniyor..."
-    
-    echo -e "\n${BOLD}${YELLOW}Tüm Kullanılabilir Saat Dilimleri:${NC}\n"
-    
-    timedatectl list-timezones | while IFS= read -r tz; do
-        echo -e "${CYAN}• ${NC}$tz"
-    done | column -c 80
-    
-    echo ""
-}
-
-# Saat dilimi seçimi
-select_timezone() {
-    local selected_tz=""
-    
-    while true; do
-        list_available_timezones
+    if [ $? -eq 0 ]; then
+        log_message "SUCCESS" "Cloudflare DNS (1.1.1.1) ayarlandı"
         
-        echo -e "${BOLD}${WHITE}Seçiminizi yapın (1-12):${NC} "
-        read -r choice
-        
-        case "$choice" in
-            1) selected_tz="Europe/Istanbul" ;;
-            2) selected_tz="UTC" ;;
-            3) selected_tz="Europe/London" ;;
-            4) selected_tz="Europe/Berlin" ;;
-            5) selected_tz="America/New_York" ;;
-            6) selected_tz="America/Los_Angeles" ;;
-            7) selected_tz="Asia/Tokyo" ;;
-            8) selected_tz="Australia/Sydney" ;;
-            9) selected_tz="Europe/Moscow" ;;
-            10) selected_tz="Asia/Dubai" ;;
-            11)
-                echo -e "${BOLD}${WHITE}Saat dilimini manuel olarak girin:${NC} "
-                read -r selected_tz
-                ;;
-            12)
-                show_all_timezones
-                echo -e "${BOLD}${WHITE}Saat dilimini girin:${NC} "
-                read -r selected_tz
-                ;;
-            *)
-                log_message "WARN" "Geçersiz seçim: $choice"
-                continue
-                ;;
-        esac
-        
-        # Saat dilimi doğrulama
-        if validate_timezone "$selected_tz"; then
-            NEW_TZ="$selected_tz"
-            break
+        # DNS testini yap
+        if ping -c 1 1.1.1.1 >/dev/null 2>&1; then
+            log_message "SUCCESS" "DNS bağlantı testi başarılı"
         else
-            log_message "ERROR" "Geçersiz saat dilimi: $selected_tz"
-            echo -e "${RED}Lütfen geçerli bir saat dilimi girin.${NC}\n"
+            log_message "WARNING" "DNS bağlantı testi başarısız"
         fi
-    done
-}
-
-# Saat dilimi doğrulama
-validate_timezone() {
-    local timezone="$1"
-    
-    if [[ -z "$timezone" ]]; then
-        return 1
-    fi
-    
-    # timedatectl ile kontrol
-    if timedatectl list-timezones | grep -q "^${timezone}$"; then
-        return 0
     else
-        return 1
+        log_message "ERROR" "DNS ayarları yapılandırılamadı!"
+        exit 1
     fi
 }
 
-# Saat dilimi ayarlama
-set_timezone() {
-    log_message "INFO" "Saat dilimi ayarlama işlemi başlatılıyor..."
+# Yeni sources.list oluştur
+create_sources_list() {
+    log_message "INFO" "Debian $DEBIAN_VERSION için yeni sources.list oluşturuluyor..."
     
-    echo -e "\n${BOLD}${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${BLUE}║                    SAAT DİLİMİ AYARLANIYOR                   ║${NC}"
-    echo -e "${BOLD}${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}\n"
+    case $DEBIAN_VERSION in
+        "10")
+            cat > "$SOURCES_LIST" << 'EOF'
+# Debian 10 (Buster) - Ana depolar
+deb http://deb.debian.org/debian buster main contrib non-free
+deb-src http://deb.debian.org/debian buster main contrib non-free
+
+# Güncelleme depoları
+deb http://deb.debian.org/debian buster-updates main contrib non-free
+deb-src http://deb.debian.org/debian buster-updates main contrib non-free
+
+# Güvenlik güncellemeleri
+deb http://security.debian.org/debian-security/ buster/updates main contrib non-free
+deb-src http://security.debian.org/debian-security/ buster/updates main contrib non-free
+EOF
+            ;;
+        "11")
+            cat > "$SOURCES_LIST" << 'EOF'
+# Debian 11 (Bullseye) - Ana depolar
+deb http://deb.debian.org/debian bullseye main contrib non-free
+deb-src http://deb.debian.org/debian bullseye main contrib non-free
+
+# Güncelleme depoları
+deb http://deb.debian.org/debian bullseye-updates main contrib non-free
+deb-src http://deb.debian.org/debian bullseye-updates main contrib non-free
+
+# Backports depoları
+deb http://deb.debian.org/debian bullseye-backports main contrib non-free
+deb-src http://deb.debian.org/debian bullseye-backports main contrib non-free
+
+# Güvenlik güncellemeleri
+deb http://security.debian.org/debian-security/ bullseye-security main contrib non-free
+deb-src http://security.debian.org/debian-security/ bullseye-security main contrib non-free
+EOF
+            ;;
+        "12")
+            cat > "$SOURCES_LIST" << 'EOF'
+# Debian 12 (Bookworm) - Ana depolar
+deb http://deb.debian.org/debian/ bookworm main contrib non-free non-free-firmware
+deb-src http://deb.debian.org/debian/ bookworm main contrib non-free non-free-firmware
+
+# Güncelleme depoları
+deb http://deb.debian.org/debian/ bookworm-updates main contrib non-free non-free-firmware
+deb-src http://deb.debian.org/debian/ bookworm-updates main contrib non-free non-free-firmware
+
+# Backports depoları
+deb http://deb.debian.org/debian/ bookworm-backports main contrib non-free non-free-firmware
+deb-src http://deb.debian.org/debian/ bookworm-backports main contrib non-free non-free-firmware
+
+# Güvenlik güncellemeleri
+deb http://security.debian.org/debian-security/ bookworm-security main contrib non-free non-free-firmware
+deb-src http://security.debian.org/debian-security/ bookworm-security main contrib non-free non-free-firmware
+EOF
+            ;;
+    esac
     
-    # İşlem adımları
-    local steps=(
-        "Mevcut ayarlar kontrol ediliyor"
-        "Saat dilimi değiştiriliyor"
-        "Sistem saati güncelleniyor"
-        "Doğrulama yapılıyor"
-        "İşlem tamamlanıyor"
-    )
+    if [ $? -eq 0 ]; then
+        log_message "SUCCESS" "Yeni sources.list oluşturuldu"
+        log_message "INFO" "sources.list içeriği:"
+        cat "$SOURCES_LIST" | while read line; do
+            if [[ ! "$line" =~ ^#.* ]] && [[ -n "$line" ]]; then
+                log_message "INFO" "  $line"
+            fi
+        done
+    else
+        log_message "ERROR" "sources.list oluşturulamadı!"
+        exit 1
+    fi
+}
+
+# Paket listesini güncelle
+update_package_list() {
+    log_message "PROGRESS" "Paket listesi güncelleniyor..."
     
-    local step_count=${#steps[@]}
+    show_progress 1 4 "APT cache temizleniyor"
+    apt-get clean >> "$LOG_FILE" 2>&1
     
-    for i in "${!steps[@]}"; do
-        local current_step=$((i + 1))
-        show_progress $current_step $step_count "${steps[$i]}"
+    show_progress 2 4 "Paket listesi güncelleniyor"
+    if apt-get update >> "$LOG_FILE" 2>&1; then
+        show_progress 3 4 "Paket listesi başarıyla güncellendi"
+        log_message "SUCCESS" "Paket listesi güncellendi"
+    else
+        show_progress 3 4 "Paket listesi güncellenemedi"
+        log_message "ERROR" "Paket listesi güncellenemedi!"
+        restore_sources_list
+        exit 1
+    fi
+    
+    show_progress 4 4 "İşlem tamamlandı"
+    echo
+}
+
+# Sistemi güncelle
+upgrade_system() {
+    log_message "PROGRESS" "Sistem güncellemeleri yapılıyor..."
+    
+    # Güncellenebilir paket sayısını al
+    local upgradable=$(apt list --upgradable 2>/dev/null | grep -c upgradable)
+    log_message "INFO" "Güncellenecek paket sayısı: $upgradable"
+    
+    if [ $upgradable -eq 0 ]; then
+        log_message "INFO" "Güncelleme gerektiren paket bulunamadı"
+        return 0
+    fi
+    
+    # Güncelleme işlemini başlat
+    echo -e "${YELLOW}Sistem güncellemeleri yapılıyor, lütfen bekleyin...${NC}"
+    
+    if apt-get upgrade -y >> "$LOG_FILE" 2>&1; then
+        log_message "SUCCESS" "Sistem güncellemeleri tamamlandı"
+    else
+        log_message "ERROR" "Sistem güncellemeleri başarısız!"
+        return 1
+    fi
+    
+    # Dist-upgrade işlemi
+    log_message "INFO" "Dağıtım güncellemeleri kontrol ediliyor..."
+    if apt-get dist-upgrade -y >> "$LOG_FILE" 2>&1; then
+        log_message "SUCCESS" "Dağıtım güncellemeleri tamamlandı"
+    else
+        log_message "WARNING" "Dağıtım güncellemeleri başarısız"
+    fi
+}
+
+# Gereksiz paketleri temizle
+cleanup_packages() {
+    log_message "PROGRESS" "Sistem temizliği yapılıyor..."
+    
+    show_progress 1 5 "Otomatik yüklenen gereksiz paketler kaldırılıyor"
+    apt-get autoremove -y >> "$LOG_FILE" 2>&1
+    
+    show_progress 2 5 "Paket cache temizleniyor"
+    apt-get autoclean >> "$LOG_FILE" 2>&1
+    
+    show_progress 3 5 "Eski kernel sürümleri kontrol ediliyor"
+    # Eski kernel'ları temizle (güvenlik için en az 2 kernel bırak)
+    local old_kernels=$(dpkg -l | grep '^ii' | grep 'linux-image-[0-9]' | wc -l)
+    if [ $old_kernels -gt 2 ]; then
+        apt-get autoremove --purge -y >> "$LOG_FILE" 2>&1
+        log_message "INFO" "Eski kernel sürümleri temizlendi"
+    fi
+    
+    show_progress 4 5 "Log dosyaları kontrol ediliyor"
+    # Eski log dosyalarını temizle (30 günden eski)
+    find /var/log -type f -name "*.log" -mtime +30 -delete 2>/dev/null
+    
+    show_progress 5 5 "Temizlik işlemi tamamlandı"
+    echo
+    
+    log_message "SUCCESS" "Sistem temizliği tamamlandı"
+}
+
+# sources.list'i geri yükle
+restore_sources_list() {
+    log_message "INFO" "Orijinal sources.list geri yükleniyor..."
+    
+    if [ -f "$SOURCES_BACKUP" ]; then
+        cp "$SOURCES_BACKUP" "$SOURCES_LIST"
+        if [ $? -eq 0 ]; then
+            log_message "SUCCESS" "Orijinal sources.list geri yüklendi"
+        else
+            log_message "ERROR" "sources.list geri yüklenemedi!"
+        fi
+    else
+        log_message "WARNING" "sources.list yedeği bulunamadı!"
+    fi
+}
+
+# DNS ayarlarını geri yükle
+restore_dns() {
+    log_message "INFO" "Orijinal DNS ayarları geri yükleniyor..."
+    
+    if [ -f "$RESOLV_BACKUP" ]; then
+        cp "$RESOLV_BACKUP" /etc/resolv.conf
+        if [ $? -eq 0 ]; then
+            log_message "SUCCESS" "Orijinal DNS ayarları geri yüklendi"
+        else
+            log_message "ERROR" "DNS ayarları geri yüklenemedi!"
+        fi
+    else
+        log_message "WARNING" "DNS yedeği bulunamadı!"
         
-        case $current_step in
-            1)
-                sleep 1
-                log_message "DEBUG" "Mevcut saat dilimi: $ORIGINAL_TZ"
-                log_message "DEBUG" "Yeni saat dilimi: $NEW_TZ"
-                ;;
-            2)
-                if ! timedatectl set-timezone "$NEW_TZ" 2>/dev/null; then
-                    error_exit "Saat dilimi ayarlanamadı: $NEW_TZ"
-                fi
-                sleep 1
-                ;;
-            3)
-                # NTP senkronizasyonu varsa güncelle
-                if timedatectl show | grep -q "NTP=yes"; then
-                    systemctl restart systemd-timesyncd 2>/dev/null || true
-                fi
-                sleep 1
-                ;;
-            4)
-                if ! verify_timezone_change; then
-                    error_exit "Saat dilimi değişikliği doğrulanamadı"
-                fi
-                sleep 1
-                ;;
-            5)
-                sleep 1
-                ;;
-        esac
-    done
-    
-    echo ""
-    log_message "SUCCESS" "Saat dilimi başarıyla ayarlandı: $NEW_TZ"
-}
-
-# Saat dilimi değişikliğini doğrula
-verify_timezone_change() {
-    log_message "INFO" "Saat dilimi değişikliği doğrulanıyor..."
-    
-    local current_tz=$(timedatectl show --property=Timezone --value)
-    
-    if [[ "$current_tz" == "$NEW_TZ" ]]; then
-        log_message "SUCCESS" "Saat dilimi doğrulaması başarılı"
-        return 0
-    else
-        log_message "ERROR" "Saat dilimi doğrulaması başarısız. Beklenen: $NEW_TZ, Mevcut: $current_tz"
-        return 1
+        # Manuel DNS geri yükleme
+        if [ -n "$ORIGINAL_DNS" ]; then
+            echo "nameserver $ORIGINAL_DNS" > /etc/resolv.conf
+            log_message "INFO" "DNS manuel olarak geri yüklendi: $ORIGINAL_DNS"
+        fi
     fi
 }
 
-# Sistem durumu gösterimi
-show_system_status() {
-    echo -e "\n${BOLD}${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${GREEN}║                    SİSTEM DURUMU                             ║${NC}"
-    echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}\n"
+# Temizlik işlemleri
+final_cleanup() {
+    log_message "INFO" "Final temizlik işlemleri yapılıyor..."
     
-    # Saat dilimi bilgileri
-    echo -e "${BOLD}${CYAN}Saat Dilimi Bilgileri:${NC}"
-    echo -e "${WHITE}├─ Önceki Saat Dilimi:${NC} $ORIGINAL_TZ"
-    echo -e "${WHITE}├─ Yeni Saat Dilimi:${NC}   $NEW_TZ"
-    echo -e "${WHITE}└─ Değişiklik Zamanı:${NC}  $(date '+%Y-%m-%d %H:%M:%S')"
+    # Geçici dosyaları temizle
+    if [ -d "$BACKUP_DIR" ]; then
+        # Yedek dosyalarını log dizinine taşı
+        if [ -f "$SOURCES_BACKUP" ]; then
+            cp "$SOURCES_BACKUP" "$LOG_DIR/"
+        fi
+        if [ -f "$RESOLV_BACKUP" ]; then
+            cp "$RESOLV_BACKUP" "$LOG_DIR/"
+        fi
+        
+        rm -rf "$BACKUP_DIR"
+        log_message "SUCCESS" "Geçici dosyalar temizlendi"
+    fi
     
-    echo -e "\n${BOLD}${CYAN}Sistem Saati:${NC}"
-    timedatectl status | while IFS= read -r line; do
-        echo -e "${WHITE}  $line${NC}"
-    done
+    # Sistem durumunu kontrol et
+    log_message "INFO" "Final sistem kontrolü yapılıyor..."
+    local disk_usage=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
+    local memory_usage=$(free | grep Mem | awk '{printf "%.1f", $3/$2 * 100.0}')
     
-    echo -e "\n${BOLD}${CYAN}Log Dosyası:${NC} $LOG_FILE"
-    echo -e "${BOLD}${CYAN}Backup Dizini:${NC} $BACKUP_DIR"
+    log_message "INFO" "Disk kullanımı: %$disk_usage"
+    log_message "INFO" "Bellek kullanımı: %$memory_usage"
     
-    echo ""
+    # Sistem servislerinin durumunu kontrol et
+    if systemctl is-active --quiet ssh; then
+        log_message "SUCCESS" "SSH servisi aktif"
+    else
+        log_message "WARNING" "SSH servisi kontrol edilmeli"
+    fi
 }
 
-#==============================================================================
-# Ana Menü Fonksiyonları
-#==============================================================================
-
-# Başlangıç banner'ı
-show_banner() {
-    clear
-    echo -e "${BOLD}${BLUE}"
-    echo "╔════════════════════════════════════════════════════════════════════════╗"
-    echo "║                    LİNUX SAAT DİLİMİ AYARLAMA ARACI                   ║"
-    echo "║                                                                        ║"
-    echo "║  Bu araç sisteminizin saat dilimini güvenli şekilde değiştirir.       ║"
-    echo "║  İşlem öncesi otomatik yedekleme yapılır ve detaylı log tutulur.      ║"
-    echo "║                                                                        ║"
-    echo "║  Versiyon: 1.0                                                         ║"
-    echo "║  Geliştirici: System Administrator                                     ║"
-    echo "╚════════════════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}\n"
+# Sistem durumunu rapor et
+show_final_report() {
+    local end_time=$(date +%s)
+    local duration=$((end_time - START_TIME))
+    local hours=$((duration / 3600))
+    local minutes=$(((duration % 3600) / 60))
+    local seconds=$((duration % 60))
+    
+    echo
+    echo -e "${GREEN}############################################################################${NC}"
+    echo -e "${GREEN}#                        GÜNCELLEME RAPORU                                #${NC}"
+    echo -e "${GREEN}############################################################################${NC}"
+    echo
+    echo -e "${WHITE}Sistem Bilgileri:${NC}"
+    echo -e "  • Debian Sürümü: $DEBIAN_VERSION"
+    echo -e "  • Güncelleme Tarihi: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo -e "  • İşlem Süresi: ${hours}s ${minutes}d ${seconds}s"
+    echo
+    echo -e "${WHITE}İşlem Detayları:${NC}"
+    echo -e "  • sources.list güncellendi ve geri yüklendi"
+    echo -e "  • DNS geçici olarak Cloudflare kullanıldı"
+    echo -e "  • Tüm güncellemeler uygulandı"
+    echo -e "  • Sistem temizliği yapıldı"
+    echo
+    echo -e "${WHITE}Log Dosyası:${NC} $LOG_FILE"
+    echo
+    
+    # Yeniden başlatma gerekip gerekmediğini kontrol et
+    if [ -f /var/run/reboot-required ]; then
+        echo -e "${YELLOW}⚠️  DİKKAT: Sistem güncellemeleri nedeniyle yeniden başlatma gerekiyor!${NC}"
+        echo -e "${YELLOW}   Lütfen uygun bir zamanda sistemi yeniden başlatın.${NC}"
+        echo
+    fi
+    
+    echo -e "${GREEN}✅ Güncelleme işlemi başarıyla tamamlandı!${NC}"
+    echo
 }
 
-# Onay alma
+# Onay al
 get_confirmation() {
-    local message="$1"
-    local response
+    echo -e "${YELLOW}Bu script aşağıdaki işlemleri gerçekleştirecek:${NC}"
+    echo -e "  • Mevcut sources.list dosyasını yedekleyecek"
+    echo -e "  • DNS ayarlarını geçici olarak Cloudflare (1.1.1.1) olarak değiştirecek"
+    echo -e "  • Debian $DEBIAN_VERSION için optimize edilmiş sources.list oluşturacak"
+    echo -e "  • Tüm sistem güncellemelerini yapacak"
+    echo -e "  • Sistem temizliği gerçekleştirecek"
+    echo -e "  • Orijinal ayarları geri yükleyecek"
+    echo
+    echo -e "${RED}⚠️  DİKKAT: Bu işlem sistem ayarlarınızı geçici olarak değiştirecektir!${NC}"
+    echo
     
     while true; do
-        echo -e "${BOLD}${YELLOW}$message (e/h):${NC} "
-        read -r response
-        
-        case "${response,,}" in
-            e|evet|yes|y)
-                return 0
+        read -p "Devam etmek istiyor musunuz? (e/h): " yn
+        case $yn in
+            [Ee]* | [Yy]* | "evet" | "EVET" ) 
+                log_message "INFO" "Kullanıcı işleme devam etmeyi onayladı"
+                break
                 ;;
-            h|hayır|no|n)
-                return 1
+            [Hh]* | [Nn]* | "hayır" | "HAYIR" ) 
+                log_message "INFO" "Kullanıcı işlemi iptal etti"
+                echo -e "${YELLOW}İşlem iptal edildi.${NC}"
+                exit 0
                 ;;
-            *)
+            * ) 
                 echo -e "${RED}Lütfen 'e' (evet) veya 'h' (hayır) girin.${NC}"
                 ;;
         esac
     done
 }
 
-# Son onay
-final_confirmation() {
-    echo -e "\n${BOLD}${YELLOW}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${YELLOW}║                        SON ONAY                              ║${NC}"
-    echo -e "${BOLD}${YELLOW}╚══════════════════════════════════════════════════════════════╝${NC}\n"
+# Hata yakalama fonksiyonu
+error_handler() {
+    local line_no=$1
+    local error_code=$2
     
-    echo -e "${BOLD}${WHITE}İşlem Özeti:${NC}"
-    echo -e "${WHITE}├─ Mevcut Saat Dilimi:${NC} $ORIGINAL_TZ"
-    echo -e "${WHITE}├─ Yeni Saat Dilimi:${NC}   $NEW_TZ"
-    echo -e "${WHITE}├─ Yedekleme:${NC}          Otomatik yapılacak"
-    echo -e "${WHITE}└─ Log Tutma:${NC}          Aktif"
+    log_message "ERROR" "Script hata ile sonlandı. Satır: $line_no, Hata kodu: $error_code"
     
-    echo ""
-    if get_confirmation "Bu değişiklikleri yapmak istediğinizden emin misiniz?"; then
-        return 0
-    else
-        log_message "INFO" "İşlem kullanıcı tarafından iptal edildi"
-        echo -e "${YELLOW}İşlem iptal edildi.${NC}"
-        exit 0
+    # Temizlik işlemlerini yap
+    if [ -f "$SOURCES_BACKUP" ]; then
+        restore_sources_list
     fi
+    
+    if [ -f "$RESOLV_BACKUP" ]; then
+        restore_dns
+    fi
+    
+    echo -e "${RED}❌ Script hata ile sonlandı. Detaylar için log dosyasını kontrol edin: $LOG_FILE${NC}"
+    exit $error_code
 }
 
-#==============================================================================
+# Signal yakalama
+cleanup_on_exit() {
+    log_message "WARNING" "Script kesintiye uğradı"
+    
+    # Yedeklemeleri geri yükle
+    if [ -f "$SOURCES_BACKUP" ]; then
+        restore_sources_list
+    fi
+    
+    if [ -f "$RESOLV_BACKUP" ]; then
+        restore_dns
+    fi
+    
+    echo -e "${YELLOW}⚠️  Script kesintiye uğradı. Ayarlar geri yüklendi.${NC}"
+    exit 130
+}
+
+#############################################################################
 # Ana Program
-#==============================================================================
+#############################################################################
 
+# Signal ve hata yakalayıcıları ayarla
+trap 'error_handler ${LINENO} $?' ERR
+trap cleanup_on_exit INT TERM
+
+# Script başlangıcı
 main() {
-    # Başlangıç
+    # Banner göster
     show_banner
-    log_message "INFO" "Script başlatıldı: $SCRIPT_NAME"
-    log_message "DEBUG" "Script dizini: $SCRIPT_DIR"
-    log_message "DEBUG" "PID: $$"
     
-    # Sistem kontrolleri
-    check_root_privileges
-    check_system_compatibility
-    setup_directories
+    # Log dizinini oluştur
+    create_log_dir
     
-    # Mevcut durumu al
-    get_current_timezone
+    # Script başlangıç logu
+    log_message "INFO" "=== $SCRIPT_NAME BAŞLATILDI ==="
+    log_message "INFO" "Script PID: $$"
+    log_message "INFO" "Başlangıç zamanı: $(date)"
+    log_message "INFO" "Log dosyası: $LOG_FILE"
     
-    # Bilgilendirme
-    echo -e "${BOLD}${CYAN}Mevcut sistem saat dilimi:${NC} $ORIGINAL_TZ"
-    echo -e "${BOLD}${CYAN}Sistem zamanı:${NC} $(date)"
-    echo ""
+    # Root kontrolü
+    check_root
     
-    if get_confirmation "Saat dilimini değiştirmek istiyor musunuz?"; then
-        # Yedek al
-        create_backup
-        
-        # Saat dilimi seçimi
-        select_timezone
-        
-        # Son onay
-        final_confirmation
-        
-        # Saat dilimini ayarla
-        set_timezone
-        
-        # Durumu göster
-        show_system_status
-        
-        log_message "SUCCESS" "İşlem başarıyla tamamlandı"
-    else
-        log_message "INFO" "İşlem kullanıcı tarafından iptal edildi"
-        echo -e "${YELLOW}İşlem iptal edildi.${NC}"
-    fi
+    # Sistem bilgilerini al
+    get_system_info
     
-    # Temizlik
-    cleanup
+    # Kullanıcı onayı al
+    get_confirmation
     
-    echo -e "${BOLD}${GREEN}İşlem tamamlandı!${NC}"
-    log_message "INFO" "Script sonlandırıldı"
+    # Backup dizini oluştur
+    create_backup_dir
+    
+    echo -e "${BLUE}🚀 Güncelleme işlemi başlatılıyor...${NC}"
+    echo
+    
+    # Ana işlemler
+    backup_sources_list
+    setup_dns
+    create_sources_list
+    update_package_list
+    upgrade_system
+    cleanup_packages
+    
+    # Geri yükleme işlemleri
+    restore_sources_list
+    restore_dns
+    
+    # Final temizlik
+    final_cleanup
+    
+    # Rapor göster
+    show_final_report
+    
+    # Script bitiş logu
+    log_message "INFO" "=== $SCRIPT_NAME TAMAMLANDI ==="
+    log_message "SUCCESS" "Tüm işlemler başarıyla tamamlandı"
 }
 
-# Script'i çalıştır
+# Ana fonksiyonu çalıştır
 main "$@"
+
+# Script başarıyla tamamlandı
+exit 0
