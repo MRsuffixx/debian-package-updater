@@ -33,7 +33,7 @@ Bu kapsamlı Bash scripti, Debian 10, 11 ve 12 sunucularını güvenli ve otomat
 #### Method 1: Using curl
 ```bash
 # Download and run directly
-curl -fsSL https://raw.githubusercontent.com/MRsuffixx/debian-package-updater/main/debian_update.sh | sudo bash
+# BROKEN curl -fsSL https://raw.githubusercontent.com/MRsuffixx/debian-package-updater/main/debian_update.sh | sudo bash
 
 # Or download first, then run
 curl -O https://raw.githubusercontent.com/MRsuffixx/debian-package-updater/main/debian_update.sh
@@ -44,7 +44,7 @@ sudo ./debian_update.sh
 #### Method 2: Using wget
 ```bash
 # Download and run directly
-wget -qO- https://raw.githubusercontent.com/MRsuffixx/debian-package-updater/main/debian_update.sh | sudo bash
+# BROKEN wget -qO- https://raw.githubusercontent.com/MRsuffixx/debian-package-updater/main/debian_update.sh | sudo bash
 
 # Or download first, then run
 wget https://raw.githubusercontent.com/MRsuffixx/debian-package-updater/main/debian_update.sh
