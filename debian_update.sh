@@ -3,7 +3,7 @@
 #############################################################################
 # Debian 10/11/12 Sunucu Güncelleme Scripti
 # Bu script Debian sunucularını güvenli bir şekilde güncelleştirir
-# Yazar: Sistem Yöneticisi
+# Yazar: MRsuffix
 # Sürüm: 1.0
 # Tarih: $(date +%Y-%m-%d)
 #############################################################################
